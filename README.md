@@ -19,7 +19,7 @@ Creer un agent SAC (Soft Actor-Critic) capable de :
 |---------|--------|
 | Asset | XAUUSD (Gold) |
 | Periode | 2015-2026 |
-| Sources | MetaTrader 5 + Yahoo + FRED + CFTC |
+| Sources | MetaTrader 5 + Yahoo + FRED + CFTC + Barchart |
 | Timeframes | D1, H4, H1, M15 (Multi-TF) |
 | Split | Train 70% (2015-2022) / Val 15% (2022-2024) / Test 15% (2024-2026) |
 
@@ -30,7 +30,7 @@ Creer un agent SAC (Soft Actor-Critic) capable de :
 | Algorithme | SAC (Soft Actor-Critic) |
 | Framework | Stable-Baselines3 |
 | Action Space | Continu [-1, +1] discretise en 3 niveaux |
-| Observation | ~1000-1500 features (Option B: features + lags) |
+| Observation | ~1200-1800 features (Option B: features + lags) |
 
 ### Position Sizing (Fixed Fractional)
 
@@ -55,7 +55,7 @@ Creer un agent SAC (Soft Actor-Critic) capable de :
 
 ---
 
-## Features (~1000-1500)
+## Features (~1200-1800)
 
 ### Architecture Multi-Timeframe
 
@@ -131,7 +131,7 @@ M15 --> Timing sniper
 | `qe_regime` | 1 si QE/expansion, -1 si QT | Calcule |
 | `monetary_policy_stance` | Dovish/Neutral/Hawkish | Calcule |
 
-### 20. Gold ETF Flows (World Gold Council)
+### 20. Gold ETF Flows (World Gold Council) - SIGNAL INSTITUTIONNEL
 
 **Source: Yahoo Finance + SPDR (Gratuit, Daily)**
 
@@ -145,11 +145,34 @@ M15 --> Timing sniper
 | `gld_flow_acceleration` | Acceleration des flows | Calcule |
 | `iau_holdings` | Holdings IAU (iShares) | Yahoo |
 | `etf_flow_signal` | Signal agrege ETF flows | Calcule |
+| `gld_holdings_zscore` | Z-score holdings 252j | Calcule |
+| `etf_flow_direction` | Direction des flows (sign) | Calcule |
 
 **Interpretation:**
-- Flows positifs = Demande institutionnelle
-- Flows negatifs = Distribution
+- Flows positifs = Demande institutionnelle (Bullish)
+- Flows negatifs = Distribution institutionnelle (Bearish)
 - Acceleration = Changement de sentiment
+- **Correlation R² = 0.85** entre GLD Holdings et prix Gold sur 10 ans
+
+**SIGNAUX DE DIVERGENCE (Tres puissants):**
+
+| Signal | Condition | Interpretation |
+|--------|-----------|----------------|
+| Divergence Bullish | Prix baisse + ETF inflows | Institutions accumulent = LONG |
+| Divergence Bearish | Prix monte + ETF outflows | Institutions distribuent = SHORT |
+| Confirmation Bullish | Prix monte + ETF inflows | Trend confirme = Hold LONG |
+| Confirmation Bearish | Prix baisse + ETF outflows | Trend confirme = Hold SHORT |
+
+```python
+# Feature: Divergence Prix/Flows
+def calculate_divergence(price_change_5d, etf_flow_5d):
+    price_direction = np.sign(price_change_5d)
+    flow_direction = np.sign(etf_flow_5d)
+    
+    if price_direction != flow_direction:
+        return flow_direction  # Divergence: suivre les institutions
+    return 0  # Pas de divergence
+```
 
 ### 21. Central Bank Reserves (World Gold Council)
 
@@ -179,7 +202,246 @@ M15 --> Timing sniper
 | `gld_options_volume` | Volume options GLD | Yahoo |
 | `implied_vs_realized_vol` | Ratio IV/RV | Calcule |
 | `vol_risk_premium` | Prime de risque vol | Calcule |
-| `gamma_exposure_approx` | GEX approxime (si dispo) | Calcule |
+
+---
+
+## 27. GAMMA EXPOSURE (GEX) - MARKET MICROSTRUCTURE
+
+**Le Gamma Exposure revele comment les Market Makers vont AMPLIFIER ou STABILISER les mouvements de prix.**
+
+### Concept
+
+```
+GEX POSITIF (Dealers Long Gamma):
+  - Prix monte → Dealers VENDENT pour hedger → RESISTANCE
+  - Prix baisse → Dealers ACHETENT pour hedger → SUPPORT
+  → Marche STABLE, faible volatilite, RANGE
+
+GEX NEGATIF (Dealers Short Gamma):
+  - Prix monte → Dealers ACHETENT pour hedger → AMPLIFIE la hausse
+  - Prix baisse → Dealers VENDENT pour hedger → AMPLIFIE la baisse
+  → Marche VOLATILE, mouvements EXPLOSIFS
+```
+
+### Sources GRATUITES pour GEX
+
+| Source | Donnees | Acces | Limite |
+|--------|---------|-------|--------|
+| **Barchart.com** | GEX GLD, GEX IAU | Gratuit | 5 requetes/jour |
+| **CBOE** | Options Open Interest | Gratuit | Daily EOD |
+| **CME Group** | Gold Options OI | Gratuit | Daily EOD |
+| **Yahoo Finance** | Options chains GLD | Gratuit | 15min delay |
+| **GitHub gex-tracker** | Script Python | Open source | Illimite |
+
+### Features GEX
+
+| Feature | Description | Source |
+|---------|-------------|--------|
+| `gex_gld` | Gamma Exposure GLD | Barchart/Calcule |
+| `gex_gld_normalized` | GEX / moyenne 30j | Calcule |
+| `gex_regime` | 1 si GEX > 0, -1 si < 0 | Calcule |
+| `gamma_flip_level` | Prix ou GEX passe de + a - | Calcule |
+| `above_gamma_flip` | 1 si prix > gamma flip | Calcule |
+| `call_wall` | Strike avec max OI calls | CME/Yahoo |
+| `put_wall` | Strike avec max OI puts | CME/Yahoo |
+| `distance_to_call_wall` | (Call Wall - Prix) / Prix | Calcule |
+| `distance_to_put_wall` | (Prix - Put Wall) / Prix | Calcule |
+| `max_pain` | Strike ou options expirent sans valeur | Calcule |
+| `distance_to_max_pain` | Distance au max pain | Calcule |
+| `gex_change_1d` | Changement GEX 1 jour | Calcule |
+| `gex_momentum` | Tendance GEX 5 jours | Calcule |
+| `put_call_oi_ratio` | Put OI / Call OI | CME/Yahoo |
+| `options_volume_ratio` | Volume Calls / Puts | CME/Yahoo |
+
+### Interpretation Trading
+
+| Regime GEX | Strategie | Taille Position |
+|------------|-----------|-----------------|
+| GEX > 0 (Positif) | Mean-reversion, fade les breakouts | Reduire (0.33%) |
+| GEX < 0 (Negatif) | Trend-following, breakouts | Normale (0.66-1%) |
+| Prix > Gamma Flip + GEX < 0 | Breakout haussier probable | Full (1%) |
+| Prix < Gamma Flip + GEX < 0 | Breakout baissier probable | Full (1%) |
+
+### Code Python - Calculer GEX (GRATUIT)
+
+```python
+import yfinance as yf
+import numpy as np
+import pandas as pd
+from datetime import datetime, timedelta
+
+def get_gld_options_data():
+    """Recupere les options GLD depuis Yahoo Finance (GRATUIT)"""
+    gld = yf.Ticker("GLD")
+    
+    # Prix spot
+    spot_price = gld.info.get('regularMarketPrice', gld.history(period='1d')['Close'].iloc[-1])
+    
+    # Dates d'expiration
+    expirations = gld.options[:4]  # 4 prochaines expirations
+    
+    all_options = []
+    for exp in expirations:
+        opt = gld.option_chain(exp)
+        calls = opt.calls.copy()
+        puts = opt.puts.copy()
+        calls['type'] = 'call'
+        puts['type'] = 'put'
+        calls['expiration'] = exp
+        puts['expiration'] = exp
+        all_options.extend([calls, puts])
+    
+    return pd.concat(all_options), spot_price
+
+def calculate_gex(options_df, spot_price):
+    """
+    Calcule le Gamma Exposure (GEX)
+    
+    Formule: GEX = Gamma * Open Interest * Spot Price * 100 * (-1 si put)
+    
+    Hypothese: Dealers sont LONG calls (clients achetent calls)
+               Dealers sont SHORT puts (clients achetent puts)
+    """
+    options_df = options_df.copy()
+    
+    # Gamma * OI * Spot * 100 (multiplicateur options)
+    options_df['gex_contribution'] = (
+        options_df['gamma'] * 
+        options_df['openInterest'] * 
+        spot_price * 
+        100
+    )
+    
+    # Inverser le signe pour les puts (dealers short puts = short gamma)
+    options_df.loc[options_df['type'] == 'put', 'gex_contribution'] *= -1
+    
+    # GEX total
+    total_gex = options_df['gex_contribution'].sum()
+    
+    # GEX par strike
+    gex_by_strike = options_df.groupby('strike')['gex_contribution'].sum()
+    
+    return total_gex, gex_by_strike
+
+def find_key_levels(gex_by_strike, spot_price):
+    """Trouve les niveaux cles: Call Wall, Put Wall, Gamma Flip"""
+    
+    # Call Wall = Strike avec le plus gros GEX positif (resistance)
+    call_wall = gex_by_strike[gex_by_strike > 0].idxmax() if (gex_by_strike > 0).any() else None
+    
+    # Put Wall = Strike avec le plus gros GEX negatif (support)
+    put_wall = gex_by_strike[gex_by_strike < 0].idxmin() if (gex_by_strike < 0).any() else None
+    
+    # Gamma Flip = Prix ou GEX cumule passe de + a -
+    gex_cumsum = gex_by_strike.sort_index().cumsum()
+    flip_candidates = gex_cumsum[gex_cumsum.shift(1) * gex_cumsum < 0]
+    gamma_flip = flip_candidates.index[0] if len(flip_candidates) > 0 else spot_price
+    
+    return {
+        'call_wall': call_wall,
+        'put_wall': put_wall,
+        'gamma_flip': gamma_flip,
+        'above_gamma_flip': spot_price > gamma_flip
+    }
+
+def get_gex_features():
+    """Feature engineering complet pour GEX"""
+    options_df, spot = get_gld_options_data()
+    total_gex, gex_by_strike = calculate_gex(options_df, spot)
+    levels = find_key_levels(gex_by_strike, spot)
+    
+    features = {
+        'gex_total': total_gex,
+        'gex_normalized': total_gex / 1e9,  # En milliards
+        'gex_regime': 1 if total_gex > 0 else -1,
+        'call_wall': levels['call_wall'],
+        'put_wall': levels['put_wall'],
+        'gamma_flip': levels['gamma_flip'],
+        'above_gamma_flip': int(levels['above_gamma_flip']),
+        'distance_to_call_wall': (levels['call_wall'] - spot) / spot if levels['call_wall'] else 0,
+        'distance_to_put_wall': (spot - levels['put_wall']) / spot if levels['put_wall'] else 0,
+    }
+    
+    return features
+
+# Exemple d'utilisation
+if __name__ == "__main__":
+    features = get_gex_features()
+    print("=== GEX Features ===")
+    for k, v in features.items():
+        print(f"{k}: {v}")
+```
+
+### Alternative: Scraper Barchart (Plus precis)
+
+```python
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+
+def get_barchart_gex(symbol="GLD"):
+    """
+    Scrape GEX depuis Barchart.com (GRATUIT, limite 5/jour)
+    URL: https://www.barchart.com/etfs-funds/quotes/GLD/gamma-exposure
+    """
+    url = f"https://www.barchart.com/etfs-funds/quotes/{symbol}/gamma-exposure"
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
+    
+    response = requests.get(url, headers=headers)
+    soup = BeautifulSoup(response.content, 'html.parser')
+    
+    # Parser les donnees GEX (structure peut changer)
+    # Retourne les niveaux de gamma par strike
+    
+    return soup  # A adapter selon la structure HTML
+
+# Note: Pour usage intensif, utiliser le calcul Yahoo Finance ci-dessus
+```
+
+### Combo GEX + ETF Flows = Setups Optimaux
+
+```python
+def get_optimal_setup(gex_regime, etf_flow_direction, price_vs_gamma_flip):
+    """
+    Combine GEX et ETF Flows pour determiner le setup optimal
+    """
+    
+    # SETUP 1: Explosion Haussiere
+    if gex_regime == -1 and etf_flow_direction == 1 and price_vs_gamma_flip == 1:
+        return {
+            'signal': 'STRONG_LONG',
+            'size': 1.0,  # Full size
+            'reason': 'GEX negatif + ETF inflows + Prix > Gamma Flip'
+        }
+    
+    # SETUP 2: Explosion Baissiere
+    if gex_regime == -1 and etf_flow_direction == -1 and price_vs_gamma_flip == -1:
+        return {
+            'signal': 'STRONG_SHORT',
+            'size': 1.0,
+            'reason': 'GEX negatif + ETF outflows + Prix < Gamma Flip'
+        }
+    
+    # SETUP 3: Range (pas de trade)
+    if gex_regime == 1:
+        return {
+            'signal': 'NO_TRADE',
+            'size': 0.0,
+            'reason': 'GEX positif = Market makers stabilisent le prix'
+        }
+    
+    # SETUP 4: Signal faible
+    return {
+        'signal': 'WEAK',
+        'size': 0.33,
+        'reason': 'Signaux mixtes'
+    }
+```
+
+---
 
 ### 23. Futures Market Structure (CME)
 
@@ -266,6 +528,8 @@ M15 --> Timing sniper
 | TIPS, Fed Rate, Breakevens | FRED | fredapi | Daily |
 | COT Data | CFTC | cot-reports | Weekly |
 | GLD Holdings | SPDR Website | Web scraping | Daily |
+| GLD/IAU Options (pour GEX) | Yahoo Finance | yfinance | 15min delay |
+| GEX pre-calcule | Barchart.com | Web scraping | Daily (limite 5/jour) |
 | GPR Index | policyuncertainty.com | Download | Monthly |
 | Central Bank Reserves | World Gold Council | Download | Monthly |
 
@@ -274,6 +538,7 @@ M15 --> Timing sniper
 ```bash
 pip install MetaTrader5 yfinance fredapi pandas-datareader
 pip install cot-reports requests beautifulsoup4
+pip install scipy  # Pour calculs gamma
 ```
 
 ### Exemple de code pour FRED
@@ -303,6 +568,18 @@ gld_history = gld.history(period="5y")
 
 # Pour les holdings exacts, scraper SPDR
 # https://www.spdrgoldshares.com/usa/historical-data/
+```
+
+### Exemple pour GEX (voir section 27)
+
+```python
+# Voir la section 27 pour le code complet de calcul GEX
+from data.gamma_loader import get_gex_features
+
+gex_features = get_gex_features()
+print(f"GEX Regime: {'Stable' if gex_features['gex_regime'] > 0 else 'Volatile'}")
+print(f"Call Wall: {gex_features['call_wall']}")
+print(f"Put Wall: {gex_features['put_wall']}")
 ```
 
 ---
@@ -393,6 +670,7 @@ Pikachu-/
 │   ├── yahoo_loader.py         # Yahoo cross-assets
 │   ├── cot_loader.py           # COT data CFTC
 │   ├── etf_flows_loader.py     # GLD holdings/flows
+│   ├── gamma_loader.py         # GEX calculation (NEW)
 │   ├── feature_engineer.py
 │   ├── preprocessor.py
 │   └── validators.py
@@ -426,8 +704,9 @@ Pikachu-/
 │   ├── 01_data_exploration.ipynb
 │   ├── 02_feature_analysis.ipynb
 │   ├── 03_macro_features.ipynb  # Analyse features macro
-│   ├── 04_training_analysis.ipynb
-│   └── 05_backtest_results.ipynb
+│   ├── 04_gamma_analysis.ipynb  # Analyse GEX (NEW)
+│   ├── 05_training_analysis.ipynb
+│   └── 06_backtest_results.ipynb
 |
 ├── tests/
 │   └── ...
@@ -435,6 +714,7 @@ Pikachu-/
 └── scripts/
     ├── download_all_data.py     # Telecharge toutes les donnees
     ├── update_macro_data.py     # Update donnees macro
+    ├── update_gamma_data.py     # Update GEX daily (NEW)
     ├── train.py
     ├── optimize.py
     ├── backtest.py
@@ -451,7 +731,8 @@ Pikachu-/
 - [ ] Telecharger donnees macro (FRED - TIPS, Fed, Inflation)
 - [ ] Telecharger donnees COT (CFTC)
 - [ ] Telecharger GLD holdings/flows
-- [ ] Feature engineering (~1000-1500 features)
+- [ ] Calculer GEX depuis options GLD (NEW)
+- [ ] Feature engineering (~1200-1800 features)
 - [ ] Validation anti-leak, anti-lookahead
 - [ ] Split train/val/test
 
@@ -475,10 +756,11 @@ Pikachu-/
 - [ ] Validation regles FTMO
 - [ ] Analyse des trades
 - [ ] Feature importance analysis
+- [ ] Analyse impact GEX/ETF Flows (NEW)
 
 ### Phase 5 : Paper Trading
 - [ ] Connexion MT5
-- [ ] Real-time data streaming (MT5 + Yahoo + FRED)
+- [ ] Real-time data streaming (MT5 + Yahoo + FRED + GEX)
 - [ ] Paper trading sur compte demo
 - [ ] Validation en conditions reelles
 
@@ -498,9 +780,11 @@ Pikachu-/
 - **Pandas/NumPy** : Data processing
 - **TA-Lib** : Indicateurs techniques
 - **MetaTrader5** : Broker + XAUUSD, XAGUSD, USDJPY, USDCHF
-- **yfinance** : DXY, VIX, GVZ, GLD, US10Y
+- **yfinance** : DXY, VIX, GVZ, GLD, US10Y, Options chains
 - **fredapi** : TIPS, Fed Rate, Breakevens, Balance Sheet
 - **cot-reports** : COT data CFTC
+- **BeautifulSoup** : Web scraping (Barchart GEX)
+- **scipy** : Calculs gamma/options
 - **Optuna** : Hyperparameter optimization
 - **Weights & Biases** : Experiment tracking
 - **pytest** : Testing
@@ -514,6 +798,7 @@ Pikachu-/
 | FRED | https://fred.stlouisfed.org/docs/api/api_key.html |
 | MT5 | Compte demo chez broker (FTMO, etc.) |
 | Yahoo | Pas de cle requise |
+| Barchart | Pas de cle requise (limite 5 requetes/jour) |
 | W&B | https://wandb.ai/authorize |
 
 ---
