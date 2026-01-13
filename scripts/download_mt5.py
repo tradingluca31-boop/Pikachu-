@@ -8,8 +8,8 @@ Compatible avec compte demo FTMO ou tout autre broker.
 
 Donnees telechargeables:
 - XAUUSD (Gold) : M15, H1, H4, D1
-- XAGUSD (Silver) : D1
-- USDJPY, USDCHF : D1
+- XAGUSD (Silver) : M15, H1, H4, D1
+- USDJPY, USDCHF, EURUSD : D1
 
 Usage:
     python scripts/download_mt5.py
@@ -65,11 +65,12 @@ SYMBOLS_CONFIG = {
         "timeframes": ["M15", "H1", "H4", "D1"],
         "description": "Gold"
     },
-    # Cross-assets - daily only (faster)
+    # Silver - all timeframes (cross-asset important)
     "XAGUSD": {
-        "timeframes": ["D1"],
+        "timeframes": ["M15", "H1", "H4", "D1"],
         "description": "Silver"
     },
+    # Forex - daily only
     "USDJPY": {
         "timeframes": ["D1"],
         "description": "USD/JPY"
@@ -162,11 +163,11 @@ def get_symbol_info(symbol: str) -> dict:
     if info is None:
         # Try alternative symbol names
         alternatives = {
-            "XAUUSD": ["GOLD", "XAUUSDm", "XAUUSD.r", "XAUUSD_"],
-            "XAGUSD": ["SILVER", "XAGUSDm", "XAGUSD.r"],
-            "USDJPY": ["USDJPYm", "USDJPY.r"],
-            "USDCHF": ["USDCHFm", "USDCHF.r"],
-            "EURUSD": ["EURUSDm", "EURUSD.r"],
+            "XAUUSD": ["GOLD", "XAUUSDm", "XAUUSD.r", "XAUUSD_", "XAUUSD.a", "XAUUSDc"],
+            "XAGUSD": ["SILVER", "XAGUSDm", "XAGUSD.r", "XAGUSD_", "XAGUSD.a", "XAGUSDc"],
+            "USDJPY": ["USDJPYm", "USDJPY.r", "USDJPY_", "USDJPY.a"],
+            "USDCHF": ["USDCHFm", "USDCHF.r", "USDCHF_", "USDCHF.a"],
+            "EURUSD": ["EURUSDm", "EURUSD.r", "EURUSD_", "EURUSD.a"],
         }
         
         for alt in alternatives.get(symbol, []):
@@ -303,6 +304,10 @@ def validate_data():
         ("XAUUSD_H4.csv", 15000),  # ~10 years of 4H
         ("XAUUSD_H1.csv", 60000),  # ~10 years of 1H
         ("XAUUSD_M15.csv", 200000), # ~10 years of M15
+        ("XAGUSD_D1.csv", 2500),   # Silver daily
+        ("XAGUSD_H4.csv", 15000),  # Silver 4H
+        ("XAGUSD_H1.csv", 60000),  # Silver 1H
+        ("XAGUSD_M15.csv", 200000), # Silver M15
     ]
     
     all_ok = True
@@ -414,6 +419,7 @@ def main():
         
         # Quality check
         check_data_quality("XAUUSD")
+        check_data_quality("XAGUSD")
         
         # Summary
         elapsed = time.time() - start_time
@@ -446,12 +452,17 @@ def print_available_symbols():
         print("AVAILABLE SYMBOLS")
         print("="*60)
         
-        # Filter for gold/forex
+        # Filter for gold/silver/forex
         gold = [s.name for s in symbols if 'XAU' in s.name or 'GOLD' in s.name]
+        silver = [s.name for s in symbols if 'XAG' in s.name or 'SILVER' in s.name]
         forex = [s.name for s in symbols if any(x in s.name for x in ['USD', 'EUR', 'GBP', 'JPY', 'CHF'])]
         
         print("\nGold symbols:")
         for s in gold[:10]:
+            print(f"  {s}")
+        
+        print("\nSilver symbols:")
+        for s in silver[:10]:
             print(f"  {s}")
         
         print(f"\nForex symbols: {len(forex)} available")
